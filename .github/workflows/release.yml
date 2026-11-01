@@ -1,11 +1,12 @@
 name: Release
 
-# Push a tag like v0.1.0. This builds, publishes to PyPI with trusted publishing
-# (no API token stored anywhere), installs it back from PyPI and re-runs the demo.
+# Publish a GitHub release with a tag like v0.1.0 (Releases > Draft a new release).
+# This builds, publishes to PyPI with trusted publishing (no API token stored
+# anywhere), installs it back from PyPI and re-runs the demo.
 
 on:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -56,17 +57,3 @@ jobs:
           set -e
           test "$code" = "1" && grep -q "3 failed" out.txt
           python -m pytest fixed --wirecheck -q -p no:cacheprovider
-
-  github-release:
-    needs: verify
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - name: Create the GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
-            gh release create "$GITHUB_REF_NAME" --title "WireCheck $GITHUB_REF_NAME" --generate-notes
