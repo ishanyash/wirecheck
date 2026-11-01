@@ -33,6 +33,8 @@ Python teams that call Claude through the `anthropic` SDK and run pytest in CI. 
 | `pytest fixed --wirecheck` | 3 passed. 3 requests checked: 0 errors |
 | `wirecheck scan demo/broken` (static) | 1 of the 3 bugs found |
 
+Same result after the release, with `pip install pytest-wirecheck==0.1.0 "anthropic>=2.0.0"` from PyPI: 3 passed, then 3 failed with 3 errors, then 0 errors on the fixed code. [Release run](https://github.com/ishanyash/wirecheck/actions/runs/41334567922)
+
 The static scan finds only the bug written in the call itself. The other two live in a dict that is unpacked at runtime, and only the recorded request shows them.
 
 ### Real repo 1: simonw/llm-anthropic
