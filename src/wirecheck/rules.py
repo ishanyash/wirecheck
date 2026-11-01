@@ -178,7 +178,7 @@ def check(captured: Captured, ctx: Context | None = None) -> list[Finding]:
             Finding(
                 rule_id=rule_id,
                 severity=severity,
-                message=f"{detail} {rule.summary}".strip(),
+                message=" ".join(f"{detail} {rule.summary}".split()),
                 doc=rule.doc,
                 where=where,
                 api_version=res.api_version,

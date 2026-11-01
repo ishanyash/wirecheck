@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections import Counter
+from collections.abc import Sequence
 from typing import Any
 
 import pytest
@@ -70,14 +71,32 @@ def pytest_unconfigure(config: pytest.Config) -> None:
         state.stop()
 
 
+class CapturedView(Sequence):
+    """Live, read-only list of the requests one test has sent so far."""
+
+    def __init__(self, state: "WireCheck | None", nodeid: str) -> None:
+        self._state = state
+        self._nodeid = nodeid
+
+    def _items(self) -> list[Captured]:
+        if self._state is None:
+            return []
+        return [c for c in self._state.captured if c.test == self._nodeid]
+
+    def __getitem__(self, index: Any) -> Any:
+        return self._items()[index]
+
+    def __len__(self) -> int:
+        return len(self._items())
+
+    def __repr__(self) -> str:
+        return f"CapturedView({self._items()!r})"
+
+
 @pytest.fixture
-def wirecheck_requests(request: pytest.FixtureRequest) -> list[Captured]:
-    """Requests to the Claude API captured during this test (empty if WireCheck is off)."""
-    state = request.config.stash.get(STATE_KEY, None)
-    if state is None:
-        return []
-    nodeid = request.node.nodeid
-    return [c for c in state.captured if c.test == nodeid]
+def wirecheck_requests(request: pytest.FixtureRequest) -> CapturedView:
+    """Requests to the Claude API captured during this test (always empty if WireCheck is off)."""
+    return CapturedView(request.config.stash.get(STATE_KEY, None), request.node.nodeid)
 
 
 @pytest.fixture
