@@ -29,3 +29,5 @@ pytest fixed --wirecheck    # 3 passed
 `wirecheck scan broken` (the static scanner) finds only the first bug. In the
 other two the parameter is in a dict that is unpacked at runtime, so you can
 only see it in the real request. That is why the pytest plugin exists.
+
+This line exists only to open a test pull request, so the WireCheck Action posts its findings comment on it.
