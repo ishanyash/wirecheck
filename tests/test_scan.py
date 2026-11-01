@@ -163,6 +163,16 @@ def test_comment_merges_both_reports(tree, monkeypatch):
     assert "3 requests captured in tests" in md
 
 
+def test_comment_counts_and_pytest_exit(tmp_path, capsys):
+    (tmp_path / "s.json").write_text(json.dumps({"files_scanned": 1, "findings": [
+        {"rule_id": "WCS003", "severity": "error", "path": "a.sh", "line": 1, "message": "m", "doc": "d"},
+        {"rule_id": "WCS005", "severity": "warn", "path": "a.py", "line": 2, "message": "m", "doc": "d"}]}))
+    cli.main(["comment", "--scan", str(tmp_path / "s.json"), "-o", str(tmp_path / "c.md"),
+              "--pytest-exit", "4", "--counts"])
+    assert capsys.readouterr().out == "errors=1\nwarnings=1\n"
+    assert "pytest exited with code 4" in (tmp_path / "c.md").read_text()
+
+
 def test_comment_with_nothing_found(tmp_path):
     out = tmp_path / "c.md"
     (tmp_path / "s.json").write_text(json.dumps({"files_scanned": 4, "findings": []}))

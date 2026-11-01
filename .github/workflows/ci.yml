@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }}, ${{ matrix.sdk }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+        sdk: ["anthropic>=2.0.0"]
+        include:
+          - python: "3.12"
+            sdk: "anthropic>=1.0.0,<2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e . "${{ matrix.sdk }}" httpx
+      - run: python -m pip list | grep -i -E "anthropic|httpx|pytest"
+      - run: python -m pytest -q -rs
+
+  demo:
+    name: demo (installed wheel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Build the wheel and install it like a user would
+        run: |
+          python -m pip install build
+          python -m build
+          python -m pip install dist/*.whl "anthropic>=2.0.0"
+          python -m pip show pytest-wirecheck anthropic | grep -E "^(Name|Version)"
+      - name: Broken code without WireCheck passes (the gap)
+        working-directory: demo
+        run: python -m pytest broken -q -p no:cacheprovider
+      - name: Broken code with WireCheck fails on all 3 bugs
+        working-directory: demo
+        run: |
+          set +e
+          python -m pytest broken --wirecheck -q -p no:cacheprovider | tee out.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          test "$code" = "1"
+          grep -q "3 failed" out.txt
+          grep -q "3 requests to the Claude API checked: 3 errors" out.txt
+      - name: Fixed code with WireCheck passes
+        working-directory: demo
+        run: python -m pytest fixed --wirecheck -q -p no:cacheprovider
+      - name: Static scan of the demo
+        run: wirecheck scan demo --fail-on never

@@ -1,0 +1,142 @@
+name: "WireCheck for Claude API"
+description: "Fail CI when your code sends a Claude API request that breaks under API version 2026-10-21. Checks the real payload in tests."
+author: "Ishan Yash"
+branding:
+  icon: "check-circle"
+  color: "orange"
+
+inputs:
+  path:
+    description: "Files or folders for the static scan, separated by spaces."
+    required: false
+    default: "."
+  run-pytest:
+    description: "Run your tests with pytest --wirecheck. Set up Python and install your dependencies before this step."
+    required: false
+    default: "true"
+  pytest-args:
+    description: "Extra arguments for pytest, for example 'tests/ -x'."
+    required: false
+    default: ""
+  working-directory:
+    description: "Folder to run the scan and pytest in."
+    required: false
+    default: "."
+  fail-on:
+    description: "When to fail the job: 'error' (default), 'warn' (any finding) or 'never'."
+    required: false
+    default: "error"
+  comment:
+    description: "Post one pull request comment with the findings, and update it on later runs."
+    required: false
+    default: "true"
+  github-token:
+    description: "Token used to post the comment. Needs pull-requests: write."
+    required: false
+    default: ${{ github.token }}
+  install:
+    description: "'action' installs WireCheck from this action's own tagged source. 'skip' if you installed pytest-wirecheck yourself."
+    required: false
+    default: "action"
+
+outputs:
+  errors:
+    description: "Number of error findings (tests and scan)."
+    value: ${{ steps.report.outputs.errors }}
+  warnings:
+    description: "Number of warning findings (tests and scan)."
+    value: ${{ steps.report.outputs.warnings }}
+  report:
+    description: "Path to the Markdown report."
+    value: ${{ steps.report.outputs.report }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install WireCheck
+      shell: bash
+      env:
+        INSTALL: ${{ inputs.install }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        case "$INSTALL" in
+          action) python -m pip install --quiet --disable-pip-version-check "$ACTION_PATH" ;;
+          skip) echo "Using the WireCheck that is already installed." ;;
+          *) echo "::error::install must be 'action' or 'skip'"; exit 2 ;;
+        esac
+        wirecheck --version
+
+    - name: Static scan
+      id: scan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        SCAN_PATHS: ${{ inputs.path }}
+      run: |
+        read -r -a paths <<< "$SCAN_PATHS"
+        wirecheck scan "${paths[@]}" --fail-on never --format json -o "$RUNNER_TEMP/wirecheck-scan.json"
+        wirecheck scan "${paths[@]}" --fail-on never
+
+    - name: pytest --wirecheck
+      id: pytest
+      if: inputs.run-pytest == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        PYTEST_ARGS: ${{ inputs.pytest-args }}
+        FAIL_ON: ${{ inputs.fail-on }}
+      run: |
+        read -r -a extra <<< "$PYTEST_ARGS"
+        set +e
+        python -m pytest --wirecheck --wirecheck-fail-on "$FAIL_ON" \
+          --wirecheck-report "$RUNNER_TEMP/wirecheck-pytest.json" "${extra[@]}"
+        echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+    - name: Build report
+      id: report
+      shell: bash
+      env:
+        PYTEST_EXIT: ${{ steps.pytest.outputs.exit }}
+      run: |
+        args=(--scan "$RUNNER_TEMP/wirecheck-scan.json" -o "$RUNNER_TEMP/wirecheck-comment.md")
+        if [ -f "$RUNNER_TEMP/wirecheck-pytest.json" ]; then args+=(--pytest "$RUNNER_TEMP/wirecheck-pytest.json"); fi
+        if [ -n "$PYTEST_EXIT" ]; then args+=(--pytest-exit "$PYTEST_EXIT"); fi
+        wirecheck comment "${args[@]}" --counts >> "$GITHUB_OUTPUT"
+        echo "report=$RUNNER_TEMP/wirecheck-comment.md" >> "$GITHUB_OUTPUT"
+        cat "$RUNNER_TEMP/wirecheck-comment.md" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Comment on the pull request
+      if: inputs.comment == 'true' && github.event.pull_request.number
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        PR: ${{ github.event.pull_request.number }}
+        BODY: ${{ steps.report.outputs.report }}
+      run: |
+        marker='<!-- wirecheck-comment -->'
+        id=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+          --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n 1)
+        if [ -n "$id" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$BODY" --jq .html_url
+        else
+          gh api -X POST "repos/$REPO/issues/$PR/comments" -F "body=@$BODY" --jq .html_url
+        fi
+
+    - name: Result
+      shell: bash
+      env:
+        FAIL_ON: ${{ inputs.fail-on }}
+        ERRORS: ${{ steps.report.outputs.errors }}
+        WARNINGS: ${{ steps.report.outputs.warnings }}
+        PYTEST_EXIT: ${{ steps.pytest.outputs.exit }}
+      run: |
+        echo "WireCheck: ${ERRORS:-0} error(s), ${WARNINGS:-0} warning(s)."
+        status=0
+        if [ -n "$PYTEST_EXIT" ] && [ "$PYTEST_EXIT" != "0" ] && [ "$PYTEST_EXIT" != "5" ]; then
+          echo "::error::pytest exited with code $PYTEST_EXIT"; status=1
+        fi
+        if [ "$FAIL_ON" = "error" ] && [ "${ERRORS:-0}" -gt 0 ]; then status=1; fi
+        if [ "$FAIL_ON" = "warn" ] && [ $(( ${ERRORS:-0} + ${WARNINGS:-0} )) -gt 0 ]; then status=1; fi
+        exit $status

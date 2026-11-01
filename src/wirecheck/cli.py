@@ -43,12 +43,17 @@ def cmd_scan(args: argparse.Namespace) -> int:
 
 
 def cmd_comment(args: argparse.Namespace) -> int:
-    text = report.render_markdown(_load(args.pytest), _load(args.scan))
+    pytest_data, scan_data = _load(args.pytest), _load(args.scan)
+    text = report.render_markdown(pytest_data, scan_data, pytest_exit=args.pytest_exit)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as fh:
             fh.write(text)
-    else:
+    elif not args.counts:
         sys.stdout.write(text)
+    if args.counts:
+        findings = (pytest_data or {}).get("findings", []) + (scan_data or {}).get("findings", [])
+        errors = sum(1 for f in findings if f["severity"] == "error")
+        sys.stdout.write(f"errors={errors}\nwarnings={len(findings) - errors}\n")
     return 0
 
 
@@ -72,7 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
     c = sub.add_parser("comment", help="Build the Markdown PR comment from JSON reports.")
     c.add_argument("--pytest", help="JSON from pytest --wirecheck-report")
     c.add_argument("--scan", help="JSON from wirecheck scan --format json")
+    c.add_argument("--pytest-exit", type=int, default=None, help="pytest exit code, noted in the comment if unusual")
     c.add_argument("--output", "-o")
+    c.add_argument("--counts", action="store_true", help="Print errors=N and warnings=N (for GitHub outputs).")
     c.set_defaults(func=cmd_comment)
     return parser
 

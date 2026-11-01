@@ -98,7 +98,11 @@ def _md(text: str) -> str:
     return str(text).replace("|", "\\|").replace("\n", " ")
 
 
-def render_markdown(pytest_data: dict[str, Any] | None, scan_data: dict[str, Any] | None) -> str:
+def render_markdown(
+    pytest_data: dict[str, Any] | None,
+    scan_data: dict[str, Any] | None,
+    pytest_exit: int | None = None,
+) -> str:
     runtime = (pytest_data or {}).get("findings", [])
     static = (scan_data or {}).get("findings", [])
     errors, warns = _counts(list(runtime) + list(static))
@@ -119,6 +123,14 @@ def render_markdown(pytest_data: dict[str, Any] | None, scan_data: dict[str, Any
         facts.append(f"{_plural(scan_data.get('files_scanned', 0), 'file')} scanned")
     if facts:
         parts += ["<sub>" + " · ".join(facts) + "</sub>", ""]
+    if pytest_exit not in (None, 0, 1, 5):
+        parts += [f"> pytest exited with code {pytest_exit}, so some tests may not have run. Check the job log.", ""]
+    elif pytest_data is not None and pytest_data.get("requests_checked", 0) == 0:
+        parts += [
+            "> Your tests sent no requests to the Claude API. If they replace `client.messages.create` with a mock, "
+            "no request is ever built. Mock the HTTP response instead (see the `wirecheck_stub` fixture).",
+            "",
+        ]
 
     rows = group_findings(runtime)
     if rows:

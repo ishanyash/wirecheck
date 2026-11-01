@@ -306,7 +306,10 @@ def render_text(data: dict[str, Any]) -> str:
     findings = data["findings"]
     errors = sum(1 for f in findings if f["severity"] == "error")
     warns = sum(1 for f in findings if f["severity"] == "warn")
-    lines = [f"wirecheck scan: {data['files_scanned']} files, {errors} errors, {warns} warnings"]
+    def n(count: int, word: str) -> str:
+        return f"{count} {word}{'' if count == 1 else 's'}"
+
+    lines = [f"wirecheck scan: {n(data['files_scanned'], 'file')}, {n(errors, 'error')}, {n(warns, 'warning')}"]
     for f in sorted(findings, key=lambda x: (x["path"], x["line"], x["rule_id"])):
         lines.append(f"{f['path']}:{f['line']}: {f['rule_id']} [{f['severity']}] {f['message']}")
     used = sorted({f["rule_id"] for f in findings})
