@@ -1,8 +1,8 @@
 name: Real repo check
 
-# Run WireCheck against someone else's public repo at a fixed commit,
-# exactly as a user would: install it, install WireCheck, run the scan and
-# pytest --wirecheck. Results go to the job summary and an artifact.
+# Run WireCheck against someone else's public repo at a fixed commit:
+# install it the way its own CI does, add WireCheck, run the static scan and
+# pytest --wirecheck. Results go to the job summary, the log and an artifact.
 
 on:
   workflow_dispatch:
@@ -13,14 +13,18 @@ on:
       ref:
         description: "commit SHA to check"
         required: true
-      install:
-        description: "pip install arguments, run inside the repo"
+      setup:
+        description: "bash run inside the repo to install it and WireCheck ($WIRECHECK is WireCheck's path)"
         required: true
-        default: "-e ."
+        default: 'python -m pip install -e . && python -m pip install "$WIRECHECK"'
+      python-cmd:
+        description: "python that runs pytest (for example .venv/bin/python)"
+        required: false
+        default: "python"
       anthropic:
-        description: "anthropic version to install on top"
-        required: true
-        default: "anthropic>=2.0.0"
+        description: "optional pip spec to force, for example anthropic>=2.0.0 (empty keeps the repo's own pin)"
+        required: false
+        default: ""
       pytest-args:
         description: "extra pytest arguments"
         required: false
@@ -36,11 +40,12 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       REPO: ${{ inputs.repo }}
       REF: ${{ inputs.ref }}
-      INSTALL: ${{ inputs.install }}
+      SETUP: ${{ inputs.setup }}
+      PY: ${{ inputs.python-cmd }}
       ANTHROPIC_SPEC: ${{ inputs.anthropic }}
       PYTEST_ARGS: ${{ inputs.pytest-args }}
     steps:
@@ -56,39 +61,44 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ inputs.python }}
-      - name: Install the repo, then WireCheck and anthropic
+      - name: Install the repo and WireCheck
         working-directory: target
         run: |
-          read -r -a args <<< "$INSTALL"
-          python -m pip install --disable-pip-version-check "${args[@]}"
-          python -m pip install --disable-pip-version-check ../wirecheck "$ANTHROPIC_SPEC"
-          python -m pip show anthropic pytest-wirecheck | grep -E "^(Name|Version)"
-          git rev-parse HEAD
+          export WIRECHECK="$GITHUB_WORKSPACE/wirecheck"
+          python -m pip install --quiet --upgrade pip uv
+          bash -euo pipefail -c "$SETUP"
+          if [ -n "$ANTHROPIC_SPEC" ]; then
+            "$PY" -m pip install "$ANTHROPIC_SPEC" 2>/dev/null || uv pip install --python "$PY" "$ANTHROPIC_SPEC"
+          fi
+          "$PY" -m pip show anthropic pytest-wirecheck 2>/dev/null | grep -E "^(Name|Version)" \
+            || uv pip show --python "$PY" anthropic pytest-wirecheck | grep -E "^(Name|Version)"
+          echo "commit: $(git rev-parse HEAD)"
       - name: wirecheck scan
         working-directory: target
         run: |
-          wirecheck scan . --fail-on never
-          wirecheck scan . --fail-on never --format json -o "$RUNNER_TEMP/scan.json"
+          "$PY" -m wirecheck scan . --fail-on never
+          "$PY" -m wirecheck scan . --fail-on never --format json -o "$RUNNER_TEMP/scan.json"
       - name: pytest --wirecheck
         id: pytest
         working-directory: target
         run: |
           read -r -a extra <<< "$PYTEST_ARGS"
           set +e
-          python -m pytest --wirecheck --wirecheck-report "$RUNNER_TEMP/pytest.json" -p no:cacheprovider "${extra[@]}"
+          "$PY" -m pytest --wirecheck --wirecheck-report "$RUNNER_TEMP/pytest.json" -p no:cacheprovider "${extra[@]}"
           echo "exit=$?" | tee -a "$GITHUB_OUTPUT"
       - name: Summary
         if: always()
+        working-directory: target
         env:
           PYTEST_EXIT: ${{ steps.pytest.outputs.exit }}
         run: |
           args=(--scan "$RUNNER_TEMP/scan.json" -o "$RUNNER_TEMP/summary.md")
           [ -f "$RUNNER_TEMP/pytest.json" ] && args+=(--pytest "$RUNNER_TEMP/pytest.json")
           [ -n "$PYTEST_EXIT" ] && args+=(--pytest-exit "$PYTEST_EXIT")
-          wirecheck comment "${args[@]}"
-          { echo "## $REPO @ $REF"; echo; echo "pytest exit code: ${PYTEST_EXIT:-not run}"; echo; cat "$RUNNER_TEMP/summary.md"; } >> "$GITHUB_STEP_SUMMARY"
+          "$PY" -m wirecheck comment "${args[@]}"
+          { echo "## $REPO @ $REF"; echo; echo "anthropic override: ${ANTHROPIC_SPEC:-none}; pytest exit code: ${PYTEST_EXIT:-not run}"; echo; cat "$RUNNER_TEMP/summary.md"; } >> "$GITHUB_STEP_SUMMARY"
           echo "----- pytest.json -----"; cat "$RUNNER_TEMP/pytest.json" 2>/dev/null || echo "(none)"
-          echo "----- scan.json -----"; cat "$RUNNER_TEMP/scan.json"
+          echo "----- scan.json -----"; cat "$RUNNER_TEMP/scan.json" 2>/dev/null || echo "(none)"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
