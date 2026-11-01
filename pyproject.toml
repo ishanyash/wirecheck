@@ -1,0 +1,50 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pytest-wirecheck"
+version = "0.1.0"
+description = "Record what your code really sends to the Claude API in tests, and fail the build if a request would break under API version 2026-10-21."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ishan Yash" }]
+keywords = ["pytest", "anthropic", "claude", "claude-api", "migration", "ci", "lint"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Pytest",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = ["pytest>=8.0"]
+
+[project.optional-dependencies]
+test = ["anthropic>=2.0.0"]
+
+[project.urls]
+Homepage = "https://github.com/ishanyash/wirecheck"
+Source = "https://github.com/ishanyash/wirecheck"
+Issues = "https://github.com/ishanyash/wirecheck/issues"
+
+[project.scripts]
+wirecheck = "wirecheck.cli:main"
+
+[project.entry-points.pytest11]
+wirecheck = "wirecheck.plugin"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p pytester"
