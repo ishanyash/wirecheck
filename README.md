@@ -127,6 +127,7 @@ Fixtures and markers:
 - Python only, and only the `httpx` / `httpx2` HTTP clients (the SDK default). The optional `aiohttp` backend is not hooked.
 - Bedrock and Vertex requests go to other hosts and carry the version differently. Add their URL with `--wirecheck-base-url` if you want them recorded; version detection there falls back to the SDK version.
 - `wirecheck_stub` answers non-streaming calls only.
+- With `pytest-xdist`, each worker checks and fails its own tests, but `--wirecheck-report` is written per worker, so give each run its own path.
 - WC003 checks the places the guide names (user `text` blocks and `search_result` blocks). It does not flag bare `text` blocks inside `tool_result`, because the guide does not say.
 - The static scanner is a set of simple patterns. It misses anything assembled at runtime, which is why the pytest plugin exists.
 - No auto-fix and no TypeScript or other SDKs in v0.1.
