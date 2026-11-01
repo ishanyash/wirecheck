@@ -1,77 +1,78 @@
 name: Real repo check
 
-# Run WireCheck against someone else's public repo at a fixed commit:
-# install it the way its own CI does, add WireCheck, run the static scan and
-# pytest --wirecheck. Results go to the job summary, the log and an artifact.
+# Runs WireCheck on real public repos at fixed commits, the way a user would:
+# install the repo as its own CI does, add WireCheck, run the static scan and
+# pytest --wirecheck. Each repo runs twice: on the anthropic version its own
+# install picks, and with anthropic>=2.0.0 forced in (what an upgrade does).
+# Results go to the job summary, the log and an artifact. LAUNCH.md quotes them.
+#
+# Trigger: push to the `measure` branch, or run it by hand from the Actions tab.
 
 on:
+  push:
+    branches: [measure]
   workflow_dispatch:
-    inputs:
-      repo:
-        description: "owner/name of the public repo"
-        required: true
-      ref:
-        description: "commit SHA to check"
-        required: true
-      setup:
-        description: "bash run inside the repo to install it and WireCheck ($WIRECHECK is WireCheck's path)"
-        required: true
-        default: 'python -m pip install -e . && python -m pip install "$WIRECHECK"'
-      python-cmd:
-        description: "python that runs pytest (for example .venv/bin/python)"
-        required: false
-        default: "python"
-      anthropic:
-        description: "optional pip spec to force, for example anthropic>=2.0.0 (empty keeps the repo's own pin)"
-        required: false
-        default: ""
-      pytest-args:
-        description: "extra pytest arguments"
-        required: false
-        default: ""
-      python:
-        description: "Python version"
-        required: false
-        default: "3.12"
 
 permissions:
   contents: read
 
 jobs:
   check:
+    name: ${{ matrix.repo }} (${{ matrix.sdk }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - repo: simonw/llm-anthropic
+            ref: b66cdf112c7d9da30edff581c37de64d796e617e
+            sdk: own pin
+            setup: uv sync --group dev
+            pytest-args: ""
+          - repo: simonw/llm-anthropic
+            ref: b66cdf112c7d9da30edff581c37de64d796e617e
+            sdk: anthropic>=2.0.0
+            setup: uv sync --group dev
+            pytest-args: ""
+          - repo: pydantic/pydantic-ai
+            ref: e286b84a1302849da685eeeeefcf2f4b12662d45
+            sdk: own pin
+            setup: uv sync --frozen
+            pytest-args: tests/models/test_anthropic.py
+          - repo: pydantic/pydantic-ai
+            ref: e286b84a1302849da685eeeeefcf2f4b12662d45
+            sdk: anthropic>=2.0.0
+            setup: uv sync --frozen
+            pytest-args: tests/models/test_anthropic.py
     env:
-      REPO: ${{ inputs.repo }}
-      REF: ${{ inputs.ref }}
-      SETUP: ${{ inputs.setup }}
-      PY: ${{ inputs.python-cmd }}
-      ANTHROPIC_SPEC: ${{ inputs.anthropic }}
-      PYTEST_ARGS: ${{ inputs.pytest-args }}
+      REPO: ${{ matrix.repo }}
+      REF: ${{ matrix.ref }}
+      SDK: ${{ matrix.sdk }}
+      SETUP: ${{ matrix.setup }}
+      PYTEST_ARGS: ${{ matrix.pytest-args }}
+      PY: .venv/bin/python
+      UV_PYTHON: "3.12"
     steps:
       - uses: actions/checkout@v7
         with:
           path: wirecheck
       - uses: actions/checkout@v7
         with:
-          repository: ${{ inputs.repo }}
-          ref: ${{ inputs.ref }}
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.ref }}
           path: target
           persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ inputs.python }}
-      - name: Install the repo and WireCheck
+      - uses: astral-sh/setup-uv@v7
+      - name: Install the repo, WireCheck and the SDK
         working-directory: target
         run: |
-          export WIRECHECK="$GITHUB_WORKSPACE/wirecheck"
-          python -m pip install --quiet --upgrade pip uv
           bash -euo pipefail -c "$SETUP"
-          if [ -n "$ANTHROPIC_SPEC" ]; then
-            "$PY" -m pip install "$ANTHROPIC_SPEC" 2>/dev/null || uv pip install --python "$PY" "$ANTHROPIC_SPEC"
+          uv pip install --python "$PY" "$GITHUB_WORKSPACE/wirecheck"
+          if [ "$SDK" != "own pin" ]; then
+            uv pip install --python "$PY" --no-deps "$SDK"
           fi
-          "$PY" -m pip show anthropic pytest-wirecheck 2>/dev/null | grep -E "^(Name|Version)" \
-            || uv pip show --python "$PY" anthropic pytest-wirecheck | grep -E "^(Name|Version)"
+          uv pip show --python "$PY" anthropic pytest-wirecheck pytest | grep -E "^(Name|Version)"
           echo "commit: $(git rev-parse HEAD)"
       - name: wirecheck scan
         working-directory: target
@@ -84,7 +85,7 @@ jobs:
         run: |
           read -r -a extra <<< "$PYTEST_ARGS"
           set +e
-          "$PY" -m pytest --wirecheck --wirecheck-report "$RUNNER_TEMP/pytest.json" -p no:cacheprovider "${extra[@]}"
+          "$PY" -m pytest --wirecheck --wirecheck-report "$RUNNER_TEMP/pytest.json" -p no:cacheprovider -q -rf "${extra[@]}"
           echo "exit=$?" | tee -a "$GITHUB_OUTPUT"
       - name: Summary
         if: always()
@@ -96,13 +97,13 @@ jobs:
           [ -f "$RUNNER_TEMP/pytest.json" ] && args+=(--pytest "$RUNNER_TEMP/pytest.json")
           [ -n "$PYTEST_EXIT" ] && args+=(--pytest-exit "$PYTEST_EXIT")
           "$PY" -m wirecheck comment "${args[@]}"
-          { echo "## $REPO @ $REF"; echo; echo "anthropic override: ${ANTHROPIC_SPEC:-none}; pytest exit code: ${PYTEST_EXIT:-not run}"; echo; cat "$RUNNER_TEMP/summary.md"; } >> "$GITHUB_STEP_SUMMARY"
+          { echo "## $REPO @ ${REF:0:7} ($SDK)"; echo; echo "pytest exit code: ${PYTEST_EXIT:-not run}"; echo; cat "$RUNNER_TEMP/summary.md"; } >> "$GITHUB_STEP_SUMMARY"
           echo "----- pytest.json -----"; cat "$RUNNER_TEMP/pytest.json" 2>/dev/null || echo "(none)"
           echo "----- scan.json -----"; cat "$RUNNER_TEMP/scan.json" 2>/dev/null || echo "(none)"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: wirecheck-results
+          name: wirecheck-${{ strategy.job-index }}
           path: |
             ${{ runner.temp }}/scan.json
             ${{ runner.temp }}/pytest.json
