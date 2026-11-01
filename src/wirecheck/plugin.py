@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shutil
+import tempfile
 from collections import Counter
 from collections.abc import Sequence
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -124,9 +128,43 @@ def wirecheck_stub(request: pytest.FixtureRequest) -> Any:
             own.uninstall()
 
 
+class FailureRepr:
+    """Test failure text with a one-line summary for pytest's short test summary."""
+
+    def __init__(self, text: str, summary: str) -> None:
+        self.text = text
+        self.reprcrash = SimpleNamespace(message=summary, path="", lineno=0)
+
+    def toterminal(self, tw: Any) -> None:
+        for line in self.text.splitlines():
+            tw.line(line)
+
+    def __str__(self) -> str:
+        return self.text
+
+
+def _one_line(findings: list[rules.Finding]) -> str:
+    parts = []
+    for f in findings:
+        item = f"{f.rule_id} {f.where}"
+        if item not in parts:
+            parts.append(item)
+    shown = ", ".join(parts[:3]) + (f" and {len(parts) - 3} more" if len(parts) > 3 else "")
+    return f"WireCheck: {shown} (breaks under Claude API 2026-10-21)"
+
+
 class WireCheck:
     def __init__(self, config: pytest.Config) -> None:
         self.config = config
+        workerinput = getattr(config, "workerinput", None)
+        self.worker_id: str | None = workerinput.get("workerid") if workerinput else None
+        if workerinput:
+            self.share_dir: str | None = workerinput.get("wirecheck_dir")
+            self.own_share_dir = False
+        else:
+            self.share_dir = tempfile.mkdtemp(prefix="wirecheck-")
+            self.own_share_dir = True
+        self.merged: dict[str, Any] | None = None
         base_urls = list(config.getoption("wirecheck_base_url") or []) + list(config.getini("wirecheck_base_urls"))
         env_base = os.environ.get("ANTHROPIC_BASE_URL")
         if env_base:
@@ -148,6 +186,14 @@ class WireCheck:
 
     def stop(self) -> None:
         self.recorder.uninstall()
+        if self.own_share_dir and self.share_dir:
+            shutil.rmtree(self.share_dir, ignore_errors=True)
+
+    @pytest.hookimpl(optionalhook=True)
+    def pytest_configure_node(self, node: Any) -> None:
+        """pytest-xdist: tell each worker where to leave its findings."""
+        if self.share_dir:
+            node.workerinput["wirecheck_dir"] = self.share_dir
 
     def _on_capture(self, captured: Captured) -> None:
         if captured.test in self.skip_tests:
@@ -186,17 +232,22 @@ class WireCheck:
             text = report.render_test_failure([f.to_dict() for f in failing])
             if rep.passed:
                 rep.outcome = "failed"
-                rep.longrepr = text
+                rep.longrepr = FailureRepr(text, _one_line(failing))
             else:
                 rep.sections.append(("wirecheck", text))
         return rep
 
     @pytest.hookimpl(trylast=True)
     def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
-        outside = [f for f in self.findings if not f.test and self._fails(f)]
+        if self.worker_id:
+            # pytest-xdist worker: hand the findings to the controller, which reports them.
+            if self.share_dir and os.path.isdir(self.share_dir):
+                report.dump_json(self.data(), os.path.join(self.share_dir, f"worker-{self.worker_id}.json"))
+            return
+        data = self.merged = self._merge_workers(self.data())
+        outside = [f for f in data["findings"] if not f.get("test") and self._fails_dict(f)]
         if outside and session.exitstatus == 0:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
-        data = self.data()
         path = self.config.getoption("wirecheck_report")
         if path:
             report.dump_json(data, path)
@@ -211,8 +262,34 @@ class WireCheck:
         return f"wirecheck {__version__}: hooked {libs}; anthropic SDK {sdk}; fail on {self.fail_on}"
 
     def pytest_terminal_summary(self, terminalreporter: Any) -> None:
+        if self.worker_id:
+            return
         terminalreporter.write_sep("=", "wirecheck")
-        terminalreporter.write_line(report.render_text(self.data()))
+        terminalreporter.write_line(report.render_text(self.merged or self.data()))
+
+    def _fails_dict(self, finding: dict[str, Any]) -> bool:
+        if self.fail_on == "never":
+            return False
+        return self.fail_on == "warn" or finding.get("severity") == rules.ERROR
+
+    def _merge_workers(self, own: dict[str, Any]) -> dict[str, Any]:
+        if not self.share_dir or not os.path.isdir(self.share_dir):
+            return own
+        merged = dict(own, findings=list(own["findings"]), api_versions=Counter(own["api_versions"]))
+        for name in sorted(os.listdir(self.share_dir)):
+            if not (name.startswith("worker-") and name.endswith(".json")):
+                continue
+            try:
+                with open(os.path.join(self.share_dir, name), encoding="utf-8") as fh:
+                    part = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            merged["requests_checked"] += part.get("requests_checked", 0)
+            merged["api_versions"].update(part.get("api_versions", {}))
+            merged["findings"].extend(part.get("findings", []))
+            merged["sdk_version"] = merged.get("sdk_version") or part.get("sdk_version")
+        merged["api_versions"] = dict(merged["api_versions"])
+        return merged
 
     def data(self) -> dict[str, Any]:
         versions_seen = Counter(

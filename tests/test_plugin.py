@@ -48,6 +48,28 @@ def test_temperature_fails_the_test_that_sent_it(project):
     assert "2 requests to the Claude API checked: 1 error, 0 warnings" in out
 
 
+def test_short_summary_is_one_line(project):
+    p = project(tests="def test_bad():\n    app.ask({'temperature': 0.2, 'top_p': 1})\n")
+    result = p.runpytest("--wirecheck", "-rf")
+    line = next(l for l in result.outlines if l.startswith("FAILED"))
+    assert "WC001 temperature, WC001 top_p" in line
+    assert "call site" not in line
+
+
+def test_xdist_workers_report_to_the_controller(project):
+    pytest.importorskip("xdist")
+    tests = "".join(
+        f"def test_bad_{i}():\n    app.ask({{'temperature': 0.{i}}})\n\ndef test_ok_{i}():\n    app.ask()\n\n" for i in range(4)
+    )
+    p = project(tests=tests)
+    result = p.runpytest("--wirecheck", "-n", "2", "--wirecheck-report=out.json")
+    result.assert_outcomes(passed=4, failed=4)
+    data = json.loads((p.path / "out.json").read_text())
+    assert data["requests_checked"] == 8
+    assert len(data["findings"]) == 4
+    assert "8 requests to the Claude API checked: 4 errors" in result.stdout.str()
+
+
 def test_without_the_flag_nothing_happens(project):
     p = project(tests="def test_bad():\n    app.ask({'temperature': 0.2})\n")
     p.runpytest().assert_outcomes(passed=1)

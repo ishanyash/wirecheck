@@ -21,14 +21,19 @@ pip install pytest-wirecheck
 pytest --wirecheck
 ```
 
-A test that sends a breaking request now fails, and the run ends with a short report:
+A test that sends a breaking request now fails, and the run ends with a short report. This is the [demo](demo/) on `anthropic` 2.3.0:
 
 ```
-RULE   LEVEL  COUNT  TEST                                CALL SITE                     WHAT
-WC001  error  1      broken/test_broken.py::test_extra_body  broken/app_extra_body.py:18  temperature
+3 requests to the Claude API checked: 3 errors, 0 warnings
+anthropic SDK: 2.3.0; API versions seen: 2026-10-21 x3
+
+RULE   LEVEL  COUNT  TEST                                         CALL SITE                    WHAT
+WC001  error  1      broken/test_broken.py::test_direct_call      broken/app_direct.py:12      temperature
+WC001  error  1      broken/test_broken.py::test_extra_body       broken/app_extra_body.py:18  temperature
+WC001  error  1      broken/test_broken.py::test_wrapper_factory  broken/app_factory.py:21     top_p
 ```
 
-Each row shows the rule, the test that sent the request, and the file and line in your code that made the call.
+Each row shows the rule, the test that sent the request, and the file and line in your code that made the call. Works with `pytest-xdist` too.
 
 ### GitHub Action
 
@@ -127,7 +132,6 @@ Fixtures and markers:
 - Python only, and only the `httpx` / `httpx2` HTTP clients (the SDK default). The optional `aiohttp` backend is not hooked.
 - Bedrock and Vertex requests go to other hosts and carry the version differently. Add their URL with `--wirecheck-base-url` if you want them recorded; version detection there falls back to the SDK version.
 - `wirecheck_stub` answers non-streaming calls only.
-- With `pytest-xdist`, each worker checks and fails its own tests, but `--wirecheck-report` is written per worker, so give each run its own path.
 - WC003 checks the places the guide names (user `text` blocks and `search_result` blocks). It does not flag bare `text` blocks inside `tool_result`, because the guide does not say.
 - The static scanner is a set of simple patterns. It misses anything assembled at runtime, which is why the pytest plugin exists.
 - No auto-fix and no TypeScript or other SDKs in v0.1.

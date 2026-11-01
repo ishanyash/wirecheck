@@ -139,7 +139,7 @@ def test_captured_even_if_the_call_errors(seen):
     assert seen and seen[0].body["temperature"] == 1
 
 
-@pytest.mark.skipif(not SDK2, reason="checks the 1.0+ signature")
+@pytest.mark.skipif((versions.sdk_major(SDK) or 0) < 1, reason="checks the 1.0+ signature")
 def test_temperature_keyword_is_a_type_error_so_tests_already_catch_it(seen):
     # Since anthropic 1.0.0 the keyword is gone; only extra_body gets it to the wire.
     with pytest.raises(TypeError):
