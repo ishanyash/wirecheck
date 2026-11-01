@@ -1,11 +1,11 @@
 """Bug 2: a shared wrapper adds sampling defaults to every call.
 
-The call sites look clean. The bad parameter lives in one shared place.
+The call sites look clean. The bad parameter lives in one shared defaults dict.
 """
 
 import anthropic
 
-DEFAULT_PARAMS = {"max_tokens": 512, "top_p": 0.9}
+DEFAULT_PARAMS = {"max_tokens": 512, "extra_body": {"top_p": 0.9}}
 
 
 def get_client() -> anthropic.Anthropic:

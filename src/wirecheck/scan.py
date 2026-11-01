@@ -60,7 +60,8 @@ SCAN_RULES: dict[str, ScanRule] = {
         ),
         ScanRule(
             "WCS005", "warn",
-            "temperature / top_p / top_k passed to a Messages call. Returns 400 under 2026-10-21. "
+            "temperature / top_p / top_k passed to a Messages call. As a keyword it is a TypeError in "
+            "anthropic>=1.0.0; through extra_body it returns 400 under 2026-10-21. "
             "Static hint only: run pytest --wirecheck to see what is really sent.",
             MIGRATION_DOC + "#messages-api-changes",
         ),

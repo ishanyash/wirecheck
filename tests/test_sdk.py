@@ -125,7 +125,7 @@ def test_async_client(seen):
     async def go():
         c = anthropic.AsyncAnthropic(api_key="sk-test", max_retries=0,
                                      http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(ok)))
-        await c.messages.create(model="claude-sonnet-4-6", max_tokens=5, top_p=0.5,
+        await c.messages.create(model="claude-sonnet-4-6", max_tokens=5, extra_body={"top_p": 0.5},
                                 messages=[{"role": "user", "content": "hi"}])
 
     asyncio.run(go())
@@ -134,9 +134,18 @@ def test_async_client(seen):
 
 def test_captured_even_if_the_call_errors(seen):
     with pytest.raises(Exception):
-        client(boom).messages.create(model="claude-sonnet-4-6", max_tokens=5, temperature=1,
+        client(boom).messages.create(model="claude-sonnet-4-6", max_tokens=5, extra_body={"temperature": 1},
                                      messages=[{"role": "user", "content": "hi"}])
     assert seen and seen[0].body["temperature"] == 1
+
+
+@pytest.mark.skipif(not SDK2, reason="checks the 1.0+ signature")
+def test_temperature_keyword_is_a_type_error_so_tests_already_catch_it(seen):
+    # Since anthropic 1.0.0 the keyword is gone; only extra_body gets it to the wire.
+    with pytest.raises(TypeError):
+        client().messages.create(model="claude-sonnet-4-6", max_tokens=5, temperature=0.2,
+                                 messages=[{"role": "user", "content": "hi"}])
+    assert seen == []
 
 
 def test_stub_gives_a_real_message_object_without_network():

@@ -6,9 +6,15 @@ HTTP response, so the tests pass anyway.
 
 | Example | Where the bad parameter is |
 |---|---|
-| `app_direct.py` | `temperature=0.0` in the call itself |
-| `app_factory.py` | `top_p` in a shared defaults dict used by a wrapper class |
-| `app_extra_body.py` | `temperature` inside `extra_body` (the Nojoin bug) |
+| `app_direct.py` | `extra_body={"temperature": 0.0}` in the call itself |
+| `app_factory.py` | `top_p` in a shared defaults dict that a wrapper class adds to every call |
+| `app_extra_body.py` | `temperature` returned by a helper method as `extra_body` (the Nojoin bug) |
+
+Why `extra_body`? Since `anthropic` 1.0.0, `temperature=` is not a keyword of
+`messages.create` any more, so passing it directly is a `TypeError` and your
+tests catch it. The SDK 1.0 migration guide said to pass it through `extra_body`
+for older models. That still works on `2023-06-01`, and returns 400 on
+`2026-10-21`. No type checker sees it.
 
 `fixed/` has the same code with the parameter removed.
 

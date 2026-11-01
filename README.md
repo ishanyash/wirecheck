@@ -10,7 +10,7 @@
 
 On 21 Oct 2026 Anthropic released Claude API version `2026-10-21`. The new SDK majors (Python `anthropic` 2.0.0 and later) send it by default. Under it, a Messages request that sends `temperature`, `top_p` or `top_k` returns **400, even at the default value** ([migration guide](https://platform.claude.com/docs/en/api/migration-2026-10-21)).
 
-Most test suites mock the API, so they never see that 400. And most of these parameters do not sit in the call you would grep for. They hide in a shared wrapper, a defaults dict, or `extra_body`. That is exactly how [Nojoin broke](https://github.com/Valtora/Nojoin/issues/554): a loose version floor pulled in `anthropic` 2.x, a wrapper still sent `temperature: 0.2` through `extra_body`, and the tests mocked the client, so they all passed.
+Most test suites mock the API, so they never see that 400. And these parameters are hard to grep for. Since `anthropic` 1.0.0, `temperature=` is no longer a keyword of `messages.create` (passing it is a `TypeError`, so tests catch it), and the SDK 1.0 migration guide said to pass it through `extra_body` instead. `extra_body` is merged into the JSON at runtime, so no type checker sees it, and it often sits in a shared wrapper or a defaults dict, far from the call. That is exactly how [Nojoin broke](https://github.com/Valtora/Nojoin/issues/554): a loose version floor pulled in `anthropic` 2.x, a wrapper still sent `temperature: 0.2` through `extra_body`, and the tests mocked the client, so they all passed.
 
 WireCheck looks at the final request as it leaves the HTTP client, after the SDK has merged every wrapper, default and `extra_body`.
 
