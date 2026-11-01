@@ -62,3 +62,8 @@ jobs:
         run: python -m pytest fixed --wirecheck -q -p no:cacheprovider
       - name: Static scan of the demo
         run: wirecheck scan demo --fail-on never
+      - name: Coloured output for the README screenshot
+        working-directory: demo
+        env:
+          COLUMNS: "110"
+        run: python -m pytest broken --wirecheck -p no:cacheprovider --color=yes || true
