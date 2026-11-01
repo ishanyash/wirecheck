@@ -59,6 +59,12 @@ def render_text(data: dict[str, Any]) -> str:
         f"anthropic SDK: {data.get('sdk_version') or 'not installed'}; "
         f"API versions seen: {', '.join(f'{k} x{v}' for k, v in data.get('api_versions', {}).items()) or 'none'}",
     ]
+    internal = data.get("internal_errors") or []
+    if internal:
+        lines.append(
+            f"WARNING: WireCheck hit {len(internal)} internal error(s), so some requests may be missing. "
+            f"First: {internal[0]}. Please report it at {REPO_URL}/issues"
+        )
     if data["requests_checked"] == 0:
         lines.append(
             "No requests were seen. If your tests replace client.messages.create with a mock, no request is "
@@ -123,6 +129,10 @@ def render_markdown(
         facts.append(f"{_plural(scan_data.get('files_scanned', 0), 'file')} scanned")
     if facts:
         parts += ["<sub>" + " · ".join(facts) + "</sub>", ""]
+    internal = (pytest_data or {}).get("internal_errors") or []
+    if internal:
+        parts += [f"> WireCheck hit {len(internal)} internal error(s), so some requests may be missing. "
+                  f"First: `{_md(internal[0])}`", ""]
     if pytest_exit not in (None, 0, 1, 5):
         parts += [f"> pytest exited with code {pytest_exit}, so some tests may not have run. Check the job log.", ""]
     elif pytest_data is not None and pytest_data.get("requests_checked", 0) == 0:

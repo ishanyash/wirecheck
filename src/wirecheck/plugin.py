@@ -275,7 +275,12 @@ class WireCheck:
     def _merge_workers(self, own: dict[str, Any]) -> dict[str, Any]:
         if not self.share_dir or not os.path.isdir(self.share_dir):
             return own
-        merged = dict(own, findings=list(own["findings"]), api_versions=Counter(own["api_versions"]))
+        merged = dict(
+            own,
+            findings=list(own["findings"]),
+            api_versions=Counter(own["api_versions"]),
+            internal_errors=list(own.get("internal_errors", [])),
+        )
         for name in sorted(os.listdir(self.share_dir)):
             if not (name.startswith("worker-") and name.endswith(".json")):
                 continue
@@ -287,6 +292,7 @@ class WireCheck:
             merged["requests_checked"] += part.get("requests_checked", 0)
             merged["api_versions"].update(part.get("api_versions", {}))
             merged["findings"].extend(part.get("findings", []))
+            merged["internal_errors"].extend(part.get("internal_errors", []))
             merged["sdk_version"] = merged.get("sdk_version") or part.get("sdk_version")
         merged["api_versions"] = dict(merged["api_versions"])
         return merged
@@ -304,4 +310,5 @@ class WireCheck:
             "api_versions": dict(versions_seen),
             "fail_on": self.fail_on,
             "findings": [f.to_dict() for f in self.findings],
+            "internal_errors": list(self.recorder.errors[:50]),
         }

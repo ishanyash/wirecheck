@@ -105,6 +105,41 @@ def test_captured_even_when_the_request_then_fails(recorder):
     assert recorder.seen[0].body == {"temperature": 1}
 
 
+def test_no_blocking_calls_inside_the_event_loop(recorder, monkeypatch):
+    """Async checkers such as blockbuster raise on file system calls in the loop (pydantic-ai uses it)."""
+    import os
+    import threading
+
+    def boom(*a, **k):
+        raise RuntimeError("Blocking call")
+
+    for name in ("abspath", "relpath", "realpath", "exists", "isfile", "isdir"):
+        monkeypatch.setattr(os.path, name, boom)
+    monkeypatch.setattr(os, "getcwd", boom)
+    monkeypatch.setattr(os, "stat", boom)
+    monkeypatch.setattr(threading, "Lock", boom)
+
+    async def go():
+        async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
+            await client.post(URL, json={"temperature": 0.2})
+
+    asyncio.run(go())
+    monkeypatch.undo()
+    assert recorder.errors == []
+    assert recorder.seen[0].body == {"temperature": 0.2}
+    assert "test_capture.py" in recorder.seen[0].call_site
+
+
+def test_internal_errors_are_recorded_not_hidden(recorder, monkeypatch):
+    def broken(*a, **k):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(recorder, "on_capture", broken)
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
+    assert client.post(URL, json={}).status_code == 200  # the user's request still goes through
+    assert len(recorder.errors) == 1 and "boom" in recorder.errors[0]
+
+
 def test_uninstall_restores_the_original_send():
     original = httpx2.Client.send
     rec = Recorder(lambda c: None)

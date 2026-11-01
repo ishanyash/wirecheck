@@ -15,7 +15,6 @@ import json
 import os
 import sys
 import sysconfig
-import threading
 from typing import Any, Callable
 
 from .rules import Captured
@@ -24,9 +23,22 @@ DEFAULT_HOSTS = ("api.anthropic.com",)
 LIBRARIES = ("httpx2", "httpx")
 REDACT = {"x-api-key", "authorization", "proxy-authorization", "cookie"}
 
-_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+def _norm(path: str) -> str:
+    """Pure string normalising, no file system calls.
+
+    The hook runs inside the user's event loop. Tools such as blockbuster raise on
+    blocking calls there (os.path.abspath, os.getcwd, ...), so nothing on the hot
+    path may touch the file system.
+    """
+    if os.name == "nt":
+        return path.replace("/", "\\").lower()
+    return path
+
+
+# Computed once at import time, outside any event loop.
+_THIS_DIR = _norm(os.path.dirname(os.path.abspath(__file__)))
 _LIB_DIRS = tuple(
-    os.path.normcase(os.path.abspath(p))
+    _norm(os.path.abspath(p))
     for p in {
         sysconfig.get_paths().get("stdlib"),
         sysconfig.get_paths().get("platstdlib"),
@@ -35,15 +47,16 @@ _LIB_DIRS = tuple(
     }
     if p
 )
+_SEP = "\\" if os.name == "nt" else "/"
 
 
 def _is_library_file(filename: str) -> bool:
     if not filename or filename.startswith("<"):
         return True
-    path = os.path.normcase(os.path.abspath(filename))
-    if path.startswith(os.path.normcase(_THIS_DIR) + os.sep):
+    path = _norm(filename)
+    if path.startswith(_THIS_DIR + _SEP):
         return True
-    if os.sep + "site-packages" + os.sep in path or os.sep + "dist-packages" + os.sep in path:
+    if f"{_SEP}site-packages{_SEP}" in path or f"{_SEP}dist-packages{_SEP}" in path:
         return True
     return path.startswith(_LIB_DIRS)
 
@@ -54,18 +67,14 @@ def find_call_site(root: str | None = None, skip: int = 2) -> str | None:
         frame = sys._getframe(skip)
     except ValueError:
         return None
+    prefix = _norm(root).rstrip(_SEP) + _SEP if root else None
     while frame is not None:
         filename = frame.f_code.co_filename
         if not _is_library_file(filename):
             shown = filename
-            if root:
-                try:
-                    rel = os.path.relpath(filename, root)
-                    if not rel.startswith(".."):
-                        shown = rel
-                except ValueError:
-                    pass
-            return f"{shown.replace(os.sep, '/')}:{frame.f_lineno}"
+            if prefix and _norm(filename).startswith(prefix):
+                shown = filename[len(prefix):]
+            return f"{shown.replace(_SEP, '/')}:{frame.f_lineno}"
         frame = frame.f_back
     return None
 
@@ -93,8 +102,8 @@ class Recorder:
         self.current_test: str | None = None
         self.stub: dict[str, Any] | None = None  # set by the wirecheck_stub fixture
         self._originals: list[tuple[type, str, Any]] = []
-        self._lock = threading.Lock()
         self.libraries: list[str] = []
+        self.errors: list[str] = []  # internal failures, shown in the report instead of hidden
 
     # -- matching -----------------------------------------------------------
     def matches(self, url: Any) -> bool:
@@ -122,6 +131,11 @@ class Recorder:
                 body = json.loads(raw)
             except (ValueError, UnicodeDecodeError):
                 body = None
+        try:
+            call_site = find_call_site(self.root, skip=3)
+        except Exception as exc:  # a missing call site must not lose the request
+            self.errors.append(f"call site: {exc!r}")
+            call_site = None
         captured = Captured(
             method=request.method,
             url=str(request.url),
@@ -129,11 +143,11 @@ class Recorder:
             headers=headers,
             body=body,
             test=self.current_test,
-            call_site=find_call_site(self.root, skip=3),
+            call_site=call_site,
             library=library,
         )
-        with self._lock:
-            self.on_capture(captured)
+        # No lock: list.append is atomic, and lock waits count as blocking calls in async checkers.
+        self.on_capture(captured)
 
     def stub_response(self, request: Any, module: Any) -> Any | None:
         if self.stub is None or not self.matches(request.url):
@@ -176,24 +190,29 @@ class Recorder:
         sync_orig = module.Client.send
         async_orig = module.AsyncClient.send
 
-        @functools.wraps(sync_orig)
-        def send(client: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
+        def hook(request: Any) -> Any:
+            # Never break the user's test because of us, but never hide a failure either:
+            # it is counted and shown in the report.
             try:
                 recorder.observe(request, name)
-                stubbed = recorder.stub_response(request, module)
-            except Exception:  # never break the user's test because of us
-                stubbed = None
+            except Exception as exc:
+                recorder.errors.append(f"{request.method} {request.url}: {exc!r}")
+            try:
+                return recorder.stub_response(request, module)
+            except Exception as exc:
+                recorder.errors.append(f"stub: {exc!r}")
+                return None
+
+        @functools.wraps(sync_orig)
+        def send(client: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
+            stubbed = hook(request)
             if stubbed is not None:
                 return stubbed
             return sync_orig(client, request, *args, **kwargs)
 
         @functools.wraps(async_orig)
         async def asend(client: Any, request: Any, *args: Any, **kwargs: Any) -> Any:
-            try:
-                recorder.observe(request, name)
-                stubbed = recorder.stub_response(request, module)
-            except Exception:
-                stubbed = None
+            stubbed = hook(request)
             if stubbed is not None:
                 return stubbed
             return await async_orig(client, request, *args, **kwargs)

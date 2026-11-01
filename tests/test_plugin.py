@@ -164,6 +164,21 @@ def test_fast_mode_with_frozen_clock(project, monkeypatch):
     p.runpytest("--wirecheck").assert_outcomes(failed=1)
 
 
+def test_internal_errors_show_in_the_summary(project):
+    tests = (
+        "from wirecheck import rules\n"
+        "def test_x(monkeypatch):\n"
+        "    def broken(*a, **k):\n"
+        "        raise ValueError('rule exploded')\n"
+        "    monkeypatch.setattr(rules, 'check', broken)\n"
+        "    app.ask()\n"
+    )
+    result = project(tests=tests).runpytest("--wirecheck", "--wirecheck-report=out.json")
+    result.assert_outcomes(passed=1)
+    assert "WARNING: WireCheck hit 1 internal error(s)" in result.stdout.str()
+    assert "rule exploded" in result.stdout.str()
+
+
 def test_no_requests_prints_a_hint(project):
     p = project(tests="def test_nothing():\n    pass\n")
     result = p.runpytest("--wirecheck")
